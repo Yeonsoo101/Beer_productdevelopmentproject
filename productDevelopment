@@ -1,0 +1,263 @@
+## Section 1
+
+```{r}
+# Read a raw data and check the validation
+beer <- read.csv("Craft-Beer_data_set.txt")
+str(beer)
+summary(beer)
+sum(duplicated(beer)== TRUE) # no duplicated observations
+
+# Check whether there is contradiction in the given rule for new category(given rule: whether observations falls into any of categories by detecting all entries in the `Styles` variable that contain the strings/category identifiers.) 
+unique(beer$Style[grepl("IPA", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Lager", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Porter", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Stout", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Wheat", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Pale", beer$Style, ignore.case = TRUE)]) #assume only "Pale Ale" belongs to "Pale"
+unique(beer$Style[grepl("Pilsner", beer$Style, ignore.case = TRUE)])
+unique(beer$Style[grepl("Bock", beer$Style, ignore.case = TRUE)])
+
+# Categorize the beers by following general categories
+beer_new <- beer %>% mutate(category = case_when (
+  grepl("IPA", beer$Style, ignore.case = TRUE) ~ "IPA",
+  grepl("Lager", beer$Style, ignore.case = TRUE) ~ "Lager",
+  grepl("Porter",beer$Style,  ignore.case = TRUE) ~ "Porter",
+  grepl("Stout",beer$Style, ignore.case = TRUE) ~ "Stout",
+  grepl("Wheat",beer$Style, ignore.case = TRUE) ~ "Wheat",
+  grepl("Pale Ale", beer$Style, ignore.case = TRUE) ~ "Pale",
+  grepl("Pilsner", beer$Style, ignore.case = TRUE) ~ "Pilsner",
+  grepl("Bock", beer$Style, ignore.case = TRUE) ~ "Bock",
+  TRUE ~"Other"
+) )
+
+# Check the result of categorizing
+beer_new %>% group_by(category) %>% summarise( n = n()) %>% arrange(desc(n))
+```
+
+### The distribution of the ratings, the mean ratings and 95% confidence intervals within each category
+```{r}
+# Check the distribution of rating in each category
+ggplot(beer_new, aes(x=rating, y = ..density..)) + geom_histogram(binwidth=0.1) + labs(x="rating", y="Frequency") + facet_wrap(~category)
+```
+
+```{r}
+# Calculate the mean rating and 95% Confidence Intervals of rating within each category
+m.rating.by.category <- lm(rating ~ category, data = beer_new)
+m.rating.by.category.emm <- emmeans(m.rating.by.category, ~category)
+
+# Reorder the table for better plotting the result
+summary.m.rating.by.category.emm <- summary(m.rating.by.category.emm)
+rating.by.category.sorted <- mutate(summary.m.rating.by.category.emm , 
+                                  category = reorder(category, rank(summary.m.rating.by.category.emm$emmean)))
+
+# Plot the mean rating and 95% CI of rating and distribution of rating for each category
+(figure1 <- ggplot(rating.by.category.sorted, aes(x=category, y=emmean, ymin=lower.CL, ymax=upper.CL)) +
+    geom_point(col="magenta") + 
+    geom_linerange(col="magenta") +
+    geom_violin(data=beer_new, mapping=aes(x=category, y=rating, ymin=NULL, ymax=NULL), alpha=0.5) + 
+    labs(x="Category", 
+         y="Rating", 
+         title="Figure1. Distribution of rating over categories",
+         subtitle = "Violin is density. Error bars are 95% CIs of the mean") +
+    coord_flip() )
+
+# Make a table showing the result of the mean rating and 95% CI of rating for each category
+knitr::kable(rating.by.category.sorted %>% arrange(desc(emmean)))
+```
+
+
+### Check the effect of ABV on rating
+```{r}
+# Plot a data
+ggplot(data = beer_new, mapping = aes(x = ABV)) + geom_histogram(binwidth = 1) 
+ggplot(beer_new, aes(x = ABV, y = rating)) + geom_jitter(width=0, height=0.1) + geom_smooth() 
+#Trend line curved steeply because of a few observations with ABV over 20
+
+# There are only 4 observations with ABV over 20 among 5558 observations(0.0007%), we can consider them as outliers and exclude from the analysis
+beer_new %>% mutate(ABV20 = if_else(ABV > 20, "T", "F")) %>% group_by(ABV20) %>% summarise(n=n())
+```
+
+```{r}
+# Build a new data not including observation with ABV over 20 and plot the data
+beer_new2 <- beer_new %>% filter(ABV <= 20)
+ggplot(beer_new2, aes(x = ABV, y = rating)) + geom_jitter(width=0, height=0.1) + geom_smooth() 
+
+
+# Simple regression to predict rating by ABV 
+m.rating.by.abv <- lm(rating ~ ABV, data = beer_new2)
+summary(m.rating.by.abv)
+cbind(coef(m.rating.by.abv), confint(m.rating.by.abv))
+```
+
+### Check the effect of ABV, Sweet and Malty on ratings
+```{r}
+# Plot a histogram to check
+grid.arrange(ggplot(data = beer_new2, mapping = aes(x = Sweet)) + geom_histogram(binwidth = 1),
+ggplot(data = beer_new2, mapping = aes(x = Malty)) + geom_histogram(binwidth = 1))
+
+# Check the correlation between rating, ABV, Sweet, Malty
+beer_new3 <- beer_new2 %>% select(rating, ABV,Sweet, Malty)
+
+# Check correlation between rating, ABV, Sweet and Malty
+rcorr(as.matrix(beer_new3))
+```
+
+```{r}
+# Build a model_1 to predict ratings from ABV, Sweet and Malty without any interaction term
+m.rating.by.all <- lm(rating ~ ABV + Sweet + Malty, data = beer_new2)
+summary(m.rating.by.all)
+
+# Check the multicollinearity
+vif(m.rating.by.all)
+
+# All VIF scores are less than 5, we can keep all of the predictors
+```
+
+```{r}
+# Build a model_2 to predict ratings from ABV, Sweet and Malty with all possible interaction terms
+m.rating.by.all.int <- lm(rating ~ ABV * Sweet * Malty, data = beer_new2)
+summary(m.rating.by.all.int)
+cbind(coef(m.rating.by.all.int), confint(m.rating.by.all.int))
+# Interaction between Sweet and Malty, and interaction between ABV, Sweet, and Malty is not significant
+
+# Compare the model fit
+anova(m.rating.by.all, m.rating.by.all.int)
+
+# The model_2 fits better than the model_1
+# But we need to analyse further because two interaction terms are not significant
+```
+
+```{r}
+# Build a model_3 with interaction between ABV and Sweet, and interaction term between ABV and Malty
+m.rating.by.all.intSweet.intMalty <- lm(rating ~ (ABV * Sweet) + (ABV * Malty), data = beer_new2)
+summary(m.rating.by.all.intSweet.intMalty)
+cbind(coef(m.rating.by.all.intSweet.intMalty), confint(m.rating.by.all.intSweet.intMalty))
+# Every interaction term is significant
+
+# Check the multicollinearity
+vif(m.rating.by.all.intSweet.intMalty)
+
+# The high VIF scores for the model_3 are due to the structuralmulticollinearity caused by the interaction term.
+# We dont' need to worry about it
+
+# Compare the model fit with model_2
+anova(m.rating.by.all.intSweet.intMalty, m.rating.by.all.int)
+anova(m.rating.by.all, m.rating.by.all.intSweet.intMalty)
+
+# The model_2(with all possible interaction terms) doesn't fits better than model_3
+# To be sure, compare model_1 and model_3 and, the overall model_3 fit is significantly improved
+# Therefore, model_3 is our best model to predict rating by ABV, Sweet and Malty
+```
+ 
+
+```{r}
+# Plot the predicted ratings using model_3 when ABV and Malty are constant
+# Make a tibble for plotting
+predict.by.sweet <- tibble(ABV = quantile(beer_new2$ABV, c(0.1, 0.9)),
+Sweet = c(min(beer_new2$Sweet),max(beer_new2$Sweet)),
+Malty = quantile(beer_new2$Malty, c(0.25, 0.75)))
+# Expand tibble to all possible combinations 
+predict.by.sweet <- predict.by.sweet %>% expand(ABV, Sweet, Malty)
+# Make MAlty as a factor
+predict.by.sweet <- mutate(predict.by.sweet, 
+                           rating.hat = predict(m.rating.by.all.intSweet.intMalty, predict.by.sweet), 
+                           Malty = factor(Malty))
+
+plot.Sweet <-ggplot() +
+  geom_line(aes(x = Sweet, y = rating.hat, colour = Malty), 
+            data = filter(predict.by.sweet, ABV == ABV[1]))  + 
+  geom_line(aes(x = Sweet, y = rating.hat, colour = Malty), linetype = "dashed", data = filter(predict.by.sweet, ABV== ABV[8])) +
+  labs(y = "Predicted Rating", 
+       title = "Figure 2a. Predicted rating through Sweet with 2 levels of ABV and Malty", 
+       subtitle = "Solid line: ABV is low (4.5%), Dashed line: ABV is high (10%)")
+
+# Plot the predicted ratings using model_3 when ABV and Sweet are constant
+# Make a tibble for plotting
+predict.by.Malty <- tibble(ABV = quantile(beer_new2$ABV, c(0.1, 0.9)),
+Sweet = quantile(beer_new2$Sweet, c(0.25, 0.75)),
+Malty = c(min(beer_new2$Malty),max(beer_new2$Malty)))
+
+predict.by.Malty <- predict.by.Malty %>% expand(ABV, Sweet, Malty)
+
+predict.by.Malty <- mutate(predict.by.Malty, 
+                           rating.hat = predict(m.rating.by.all.intSweet.intMalty, predict.by.Malty), 
+                           Sweet = factor(Sweet))
+
+plot.Malty <-ggplot() +
+  geom_line(aes(x = Malty, y = rating.hat, colour = Sweet), data = filter(predict.by.Malty, ABV == ABV[1]))  + 
+  geom_line(aes(x = Malty, y = rating.hat, colour = Sweet), linetype = "dashed", data = filter(predict.by.Malty, ABV== ABV[8])) +
+  labs(y = "Predicted Rating", 
+       title = "Figure 2b. Predicted rating through Malty with 2 levels of ABV and Sweet", 
+       subtitle = "Solid line: ABV is low (4.5%), Dashed line: ABV is high (10%)")
+
+# Combine two plots
+grid.arrange(plot.Sweet, plot.Malty)
+```
+ 
+
+
+
+
+```{r}
+# Predicted ratings with 3 levels of ABV
+test <- tibble(ABV = c(4, 8, 14),
+Sweet = c(0, 50, max(beer_new2$Sweet)),
+Malty = c(0, 60, max(beer_new2$Malty)))
+
+test <- test %>% expand(ABV, Sweet, Malty)
+test <- mutate(test, rating.hat = predict(m.rating.by.all.intSweet.intMalty, test), ABV = factor(ABV))
+
+
+# Plot each ABV
+a<- ggplot(filter(test,ABV == 4), aes(Sweet, Malty)) + geom_contour_filled(aes(z = rating.hat)) + labs(subtitle = "ABV is 4%")   + guides(fill=guide_legend(title="y"),
+                                  shape = guide_legend(override.aes = list(size = 0.1)))
+
+b<- ggplot(filter(test,ABV == 8), aes(Sweet, Malty)) + geom_contour_filled(aes(z = rating.hat)) + labs(subtitle = "ABV is 8%")   + guides(fill=guide_legend(title="y"),
+                                  shape = guide_legend(override.aes = list(size = 0.1)))
+
+c<-ggplot(filter(test,ABV == 14), aes(Sweet, Malty)) + geom_contour_filled(aes(z = rating.hat)) + labs(subtitle = "ABV is 14%")   + guides(fill=guide_legend(title="y"),
+                                  shape = guide_legend(override.aes = list(size = 0.1)))
+figure3 <- ggarrange(a,b,c, ncol = 3,  common.legend = TRUE, legend = "bottom")
+
+figure3 <- annotate_figure(figure3,
+               top = text_grob("Figure3. Predicted ratings according to Malty and Sweet with three levels of ABV", face = "bold", size = 14),
+              
+)
+```
+
+
+
+
+---
+
+## Section 2
+
+ This report is about exploring thousands of beer data with rating and multiple flavourings information.
+
+ First of all, we sketched the overview of the data including distribution of the ratings, the mean ratings and 95% confidence intervals within each categories.
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=7}
+print(figure1)
+```
+ Figure1 shows that IPA has the highest mean rating and Lager has the lowest mean rating. Most categories seem to have a normal distribution while Larger and Other category have a long tail on low rating.
+ 
+ Secondly,we checked the effect of ABV on rating. For every extra 1% ABV, rating is raised by 0.078 ($t(5554) = 35.06, p <0.001$) with 95% CI[0.074-0.083]. Thus, we can say, on average, a beer receives a higher rating with higher ABV.
+
+ Next, we analysed the effect of ABV, Sweet and Malty on rating. Our model shows that there are main effects from ABV, Sweet and Malty, and two interaction effects; one is between ABV and Sweet, another is between ABV and Malty. The main effects are interpreted as followed. When controlling for other variables, an extra ABV predicts 0.085 additional rating ($t(5548)=19.565, p<0.001$, 95% CI[0.077, 0.094]). Likewise holding all other variables constant, an increase in Sweet predicts an increase in rating of 0.007 ($t(5548)=12.827, p<0.001$, 95% CI[0.006, 0.008]), and an increase in Malty predicts a decrease in rating of 0.002 ($t(5548)=-5.777, p<0.001$, 95% CI[-0.003, -0.002]). 
+ The interaction effects are interpreted as followed. When holding other variables constant, there is a significant positive interaction between ABV and Malty of 0.0004, being significantly smaller when ABV is higher($t(5548)=6.605, p<0.001$, 95% CI[-0.00003,-0.0005]). There is a significant negative interaction between ABV and Sweet of -0.0007($t(5548)=-10.828, p<0.001$, 95% CI[-0.0008,-0.0006]), being significantly smaller when ABV is higher, holding other variables constant. In other words, The interaction effects between ABV and Sweet become a positive effect when ABV is higher.
+  It is quite hard to understand these results intuitively, so we plot the result for the better understanding.
+
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=7}
+grid.arrange(plot.Sweet, plot.Malty)
+```
+ Figure 2a shows the predicted rating by Sweet with two levels of ABV and Malty, and Figure 2b illustrates the predicted rating by Malty with two levels of ABV and Sweet. Overall, when ABV is low at 4.5%(solid line), more Sweet and less Malty predict higher rating, but when ABV is high at 10%(dashed line) less Sweet and more Malty predict higher rating. In other words, if company is trying to maximise ratings, beers with higher ABV and lower ABV should have different flavours. 
+ 
+ To define what number is high enough to be considered as a high ABV beer, we need to carefully consider the results. The slope of figure 2a is positive with low ABV, but changes to negative around ABV of 9%. The slope of figure 2b is negative with low ABV, but changes to positive around ABV of 6%. 
+```{r, echo=FALSE, message=FALSE, fig.width=10, fig.height=7}
+print(figure3)
+```
+
+Figure3 suggests that a case with ABV of 4%(less than 6%), more Sweet and less Malty will maximise ratings, a case with ABV of 8%(between 6% and 9%) more Sweet and more Malty will maximise ratings, and a beer with ABV of14%(higher than 9%), less Sweet and more Malty will maximise ratings. Since our model only considered the ABV with less than 20, if the company wants to make a beer with ABV over 20, more beer data with ABV over 20 should be collected to get a statistically solid conclusion. 
+
+ For further consideration, there are eleven more flavour variables except for Sweet and Malty. We strongly recommend to investigate the relationships between those flavours and ratings before developing a new product. 
+ 
+---
